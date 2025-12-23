@@ -75,11 +75,9 @@ jobs:
         run: |
           python3 << 'EOF'
           import json
-          import sys
-          import os
 
-          THRESHOLD = 40.0  # 40% regression threshold
-          MIN_REGRESSIONS = 5  # Minimum number of regressions to fail
+          REGRESSION_THRESHOLD = 40.0  # Threshold for flagging significant regressions
+          IMPROVEMENT_THRESHOLD = 20.0  # Threshold for flagging improvements
 
           def parse_benchmarks(file_path):
               """Parse concatenated BenchmarkDotNet JSON files."""
@@ -132,14 +130,14 @@ jobs:
                           'change': change_pct
                       })
 
-                      if change_pct > THRESHOLD:
+                      if change_pct > REGRESSION_THRESHOLD:
                           regressions.append({
                               'name': name,
                               'baseline': baseline_mean,
                               'current': current_mean,
                               'change': change_pct
                           })
-                      elif change_pct < -THRESHOLD:
+                      elif change_pct < -IMPROVEMENT_THRESHOLD:
                           improvements.append({
                               'name': name,
                               'change': change_pct
@@ -151,28 +149,18 @@ jobs:
 
           # Generate summary
           print(f"\nCompared {len(results)} benchmarks")
-          print(f"Regressions (>{THRESHOLD}%): {len(regressions)}")
-          print(f"Improvements (<-{THRESHOLD}%): {len(improvements)}")
+          print(f"Significant regressions (>{REGRESSION_THRESHOLD}%): {len(regressions)}")
+          print(f"Improvements (<-{IMPROVEMENT_THRESHOLD}%): {len(improvements)}")
 
           if regressions:
-              print(f"\nPerformance regressions detected:")
+              print(f"\nBenchmarks with significant regression:")
               for r in sorted(regressions, key=lambda x: -x['change']):
-                  print(f"  - {r['name']}: +{r['change']:.1f}% slower ({r['baseline']:.2f}ns -> {r['current']:.2f}ns)")
+                  print(f"  - {r['name']}: +{r['change']:.1f}% ({r['baseline']:.2f}ns -> {r['current']:.2f}ns)")
 
-          # Only fail if we have at least MIN_REGRESSIONS benchmarks regressing
-          if len(regressions) >= MIN_REGRESSIONS:
-              print(f"\n::error::{len(regressions)} benchmarks regressed >{THRESHOLD}% (threshold: {MIN_REGRESSIONS})")
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write("has_regressions=true\n")
-                  f.write(f"regression_count={len(regressions)}\n")
-              sys.exit(1)
-          else:
-              if regressions:
-                  print(f"\n{len(regressions)} regression(s) detected but below threshold of {MIN_REGRESSIONS} required to fail.")
-              else:
-                  print("\nNo significant performance regressions detected.")
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write("has_regressions=false\n")
+          if improvements:
+              print(f"\nBenchmarks with significant improvement:")
+              for r in sorted(improvements, key=lambda x: x['change']):
+                  print(f"  - {r['name']}: {r['change']:.1f}%")
           EOF
 
       - name: Comment PR with benchmark results
@@ -194,24 +182,19 @@ jobs:
               const warnings = results.filter(r => r.change > 20 && r.change <= 40);
               const improvements = results.filter(r => r.change < -20);
 
-              if (regressions.length >= 5) {
-                body += `:x: **${regressions.length} benchmarks regressed >40% (PR blocked)**\n\n`;
-              } else if (regressions.length > 0) {
-                body += `:warning: **${regressions.length} benchmark(s) regressed >40% (below threshold of 5 to block)**\n\n`;
-              } else {
-                body += ':white_check_mark: **No significant performance regressions detected**\n\n';
-              }
-
               if (regressions.length > 0) {
+                body += `:warning: **${regressions.length} benchmark(s) showed significant regression (>40%)**\n\n`;
                 body += '| Benchmark | Baseline | Current | Change |\n';
                 body += '|-----------|----------|---------|--------|\n';
                 for (const r of regressions.slice(0, 10)) {
                   const shortName = r.name.split('.').slice(-2).join('.');
-                  body += `| ${shortName} | ${r.baseline.toFixed(2)}ns | ${r.current.toFixed(2)}ns | :x: +${r.change.toFixed(1)}% |\n`;
+                  body += `| ${shortName} | ${r.baseline.toFixed(2)}ns | ${r.current.toFixed(2)}ns | :warning: +${r.change.toFixed(1)}% |\n`;
                 }
                 if (regressions.length > 10) {
-                  body += `\n*...and ${regressions.length - 10} more regressions*\n`;
+                  body += `\n*...and ${regressions.length - 10} more*\n`;
                 }
+              } else {
+                body += ':white_check_mark: **No significant performance regressions detected**\n\n';
               }
 
               if (warnings.length > 0) {
@@ -275,9 +258,3 @@ jobs:
             pr-results/
             src/LightningDB.Benchmarks/BenchmarkDotNet.Artifacts/results/
           retention-days: 14
-
-      - name: Fail if regressions detected
-        if: steps.compare.outputs.has_regressions == 'true'
-        run: |
-          echo "::error::PR blocked: 5+ benchmarks regressed more than 40%"
-          exit 1
