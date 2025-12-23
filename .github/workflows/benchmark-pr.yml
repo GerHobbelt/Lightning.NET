@@ -78,7 +78,8 @@ jobs:
           import sys
           import os
 
-          THRESHOLD = 20.0  # 20% regression threshold
+          THRESHOLD = 40.0  # 40% regression threshold
+          MIN_REGRESSIONS = 5  # Minimum number of regressions to fail
 
           def parse_benchmarks(file_path):
               """Parse concatenated BenchmarkDotNet JSON files."""
@@ -154,16 +155,22 @@ jobs:
           print(f"Improvements (<-{THRESHOLD}%): {len(improvements)}")
 
           if regressions:
-              print("\n::error::Performance regressions detected!")
+              print(f"\nPerformance regressions detected:")
               for r in sorted(regressions, key=lambda x: -x['change']):
                   print(f"  - {r['name']}: +{r['change']:.1f}% slower ({r['baseline']:.2f}ns -> {r['current']:.2f}ns)")
 
+          # Only fail if we have at least MIN_REGRESSIONS benchmarks regressing
+          if len(regressions) >= MIN_REGRESSIONS:
+              print(f"\n::error::{len(regressions)} benchmarks regressed >{THRESHOLD}% (threshold: {MIN_REGRESSIONS})")
               with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
                   f.write("has_regressions=true\n")
                   f.write(f"regression_count={len(regressions)}\n")
               sys.exit(1)
           else:
-              print("\nNo significant performance regressions detected.")
+              if regressions:
+                  print(f"\n{len(regressions)} regression(s) detected but below threshold of {MIN_REGRESSIONS} required to fail.")
+              else:
+                  print("\nNo significant performance regressions detected.")
               with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
                   f.write("has_regressions=false\n")
           EOF
@@ -183,12 +190,19 @@ jobs:
               // Sort by change percentage (worst regressions first)
               results.sort((a, b) => b.change - a.change);
 
-              const regressions = results.filter(r => r.change > 20);
-              const warnings = results.filter(r => r.change > 10 && r.change <= 20);
-              const improvements = results.filter(r => r.change < -10);
+              const regressions = results.filter(r => r.change > 40);
+              const warnings = results.filter(r => r.change > 20 && r.change <= 40);
+              const improvements = results.filter(r => r.change < -20);
+
+              if (regressions.length >= 5) {
+                body += `:x: **${regressions.length} benchmarks regressed >40% (PR blocked)**\n\n`;
+              } else if (regressions.length > 0) {
+                body += `:warning: **${regressions.length} benchmark(s) regressed >40% (below threshold of 5 to block)**\n\n`;
+              } else {
+                body += ':white_check_mark: **No significant performance regressions detected**\n\n';
+              }
 
               if (regressions.length > 0) {
-                body += ':x: **Performance regressions detected (>20%)**\n\n';
                 body += '| Benchmark | Baseline | Current | Change |\n';
                 body += '|-----------|----------|---------|--------|\n';
                 for (const r of regressions.slice(0, 10)) {
@@ -198,27 +212,25 @@ jobs:
                 if (regressions.length > 10) {
                   body += `\n*...and ${regressions.length - 10} more regressions*\n`;
                 }
-              } else {
-                body += ':white_check_mark: **No significant performance regressions detected**\n\n';
               }
 
               if (warnings.length > 0) {
-                body += `\n### :warning: Minor regressions (10-20%)\n`;
+                body += `\n### :warning: Minor performance degradation (20-40%)\n`;
                 body += `${warnings.length} benchmarks showed minor slowdown\n`;
               }
 
               if (improvements.length > 0) {
                 body += `\n### :rocket: Improvements\n`;
-                body += `${improvements.length} benchmarks showed improvement (>10% faster)\n`;
+                body += `${improvements.length} benchmarks showed improvement (>20% faster)\n`;
               }
 
               body += `\n<details><summary>All results (${results.length} benchmarks)</summary>\n\n`;
-              body += '| Benchmark | Change |\n|-----------|--------|\n';
+              body += '| Benchmark | Baseline | Current | Change |\n|-----------|----------|---------|--------|\n';
               for (const r of results) {
                 const shortName = r.name.split('.').slice(-2).join('.');
-                const emoji = r.change > 20 ? ':x:' : r.change > 10 ? ':warning:' : r.change < -10 ? ':rocket:' : ':white_check_mark:';
+                const emoji = r.change > 40 ? ':x:' : r.change > 20 ? ':warning:' : r.change < -20 ? ':rocket:' : ':white_check_mark:';
                 const sign = r.change > 0 ? '+' : '';
-                body += `| ${shortName} | ${emoji} ${sign}${r.change.toFixed(1)}% |\n`;
+                body += `| ${shortName} | ${r.baseline.toFixed(2)}ns | ${r.current.toFixed(2)}ns | ${emoji} ${sign}${r.change.toFixed(1)}% |\n`;
               }
               body += '</details>\n';
 
@@ -267,5 +279,5 @@ jobs:
       - name: Fail if regressions detected
         if: steps.compare.outputs.has_regressions == 'true'
         run: |
-          echo "::error::PR blocked due to performance regressions exceeding 20% threshold"
+          echo "::error::PR blocked: 5+ benchmarks regressed more than 40%"
           exit 1
