@@ -113,6 +113,50 @@ public class CursorTests : TestBase
         });
     }
 
+    public void should_iterate_through_cursor_with_foreach()
+    {
+        using var env = CreateEnvironment();
+        env.Open();
+        env.RunCursorScenario((tx, db, c) =>
+        {
+            var keys = PopulateCursorValues(c);
+            using var c2 = tx.CreateCursor(db);
+            var i = 0;
+            foreach (var (key, value) in c2.AsEnumerable())
+            {
+                keys[i].ShouldBe(key.CopyToNewArray());
+                keys[i].ShouldBe(value.CopyToNewArray());
+                i++;
+            }
+
+            keys.Length.ShouldBe(i);
+        });
+    }
+
+    public void should_iterate_through_duplicate_values_with_foreach()
+    {
+        using var env = CreateEnvironment();
+        env.Open();
+        env.RunCursorScenario((_, _, c) =>
+        {
+            var key = "TestKey"u8.ToArray();
+            var values = Enumerable.Range(1, 5).Select(i => UTF8.GetBytes($"value{i}")).ToArray();
+            foreach (var value in values)
+            {
+                c.Put(key, value, CursorPutOptions.None);
+            }
+
+            var i = 0;
+            foreach (var value in c.AllValuesFor(key))
+            {
+                values[i].ShouldBe(value.CopyToNewArray());
+                i++;
+            }
+
+            values.Length.ShouldBe(i);
+        }, DatabaseOpenFlags.DuplicatesSort | DatabaseOpenFlags.Create);
+    }
+
     public void cursor_should_delete_elements()
     {
         using var env = CreateEnvironment();

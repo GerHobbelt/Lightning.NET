@@ -389,29 +389,26 @@ public class LightningCursor : IDisposable
         {
             Span<byte> contiguousValues = stackalloc byte[overallLength];
 
-            return InnerPutMultiple(contiguousValues);
+            return InnerPutMultiple(_handle, key, values, contiguousValues);
         }
 
         var rentedArray = ArrayPool<byte>.Shared.Rent(overallLength);
         try
         {
             var contiguousValues = rentedArray.AsSpan(0, overallLength);
-            return InnerPutMultiple(contiguousValues);
+            return InnerPutMultiple(_handle, key, values, contiguousValues);
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(rentedArray);
         }
 
-        //these local methods could be made static, but the compiler will emit these closures
-        //as structs with very little overhead. Also static local functions isn't available
-        //until C# 8 so I can't use it anyway...
-        MDBResultCode InnerPutMultiple(Span<byte> contiguousValuesBuffer)
+        static MDBResultCode InnerPutMultiple(nint handle, byte[] key, byte[][] values, Span<byte> contiguousValuesBuffer)
         {
-            FlattenInfo(contiguousValuesBuffer);
+            FlattenInfo(values, contiguousValuesBuffer);
             var contiguousValuesPtr = (byte*)Unsafe.AsPointer(ref contiguousValuesBuffer.GetPinnableReference());
 
-            var mdbValue = new MDBValue(GetSize(), contiguousValuesPtr);
+            var mdbValue = new MDBValue(GetSize(values), contiguousValuesPtr);
             var mdbCount = new MDBValue(values.Length, null);
 
             Span<MDBValue> dataBuffer = stackalloc MDBValue[2] { mdbValue, mdbCount };
@@ -420,11 +417,11 @@ public class LightningCursor : IDisposable
             {
                 var mdbKey = new MDBValue(key.Length, keyPtr);
 
-                return mdb_cursor_put(_handle, ref mdbKey, ref dataBuffer, CursorPutOptions.MultipleData);
+                return mdb_cursor_put(handle, ref mdbKey, ref dataBuffer, CursorPutOptions.MultipleData);
             }
         }
 
-        void FlattenInfo(Span<byte> targetBuffer)
+        static void FlattenInfo(byte[][] values, Span<byte> targetBuffer)
         {
             var cursor = targetBuffer;
 
@@ -435,7 +432,7 @@ public class LightningCursor : IDisposable
             }
         }
 
-        int GetSize()
+        static int GetSize(byte[][] values)
         {
             if (values.Length == 0 || values[0] == null || values[0].Length == 0)
                 return 0;

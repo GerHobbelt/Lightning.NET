@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Linq;
 using System.Collections.Generic;
 using Shouldly;
@@ -119,6 +120,86 @@ public class TransactionTests : TestBase
             var resultBuffer = new byte[value.Length];
             tx.TryGet(db, key.ToArray(), resultBuffer).ShouldBeTrue();
             resultBuffer.ShouldBe(value.ToArray());
+        });
+    }
+
+    public void try_get_with_span_destination_should_copy_value()
+    {
+        using var env = CreateEnvironment();
+        env.Open();
+        env.RunTransactionScenario((tx, db) =>
+        {
+            var key = MemoryMarshal.Cast<char, byte>("spankey");
+            var value = MemoryMarshal.Cast<char, byte>("spanvalue");
+            tx.Put(db, key, value);
+
+            Span<byte> destination = stackalloc byte[value.Length];
+            tx.TryGet(db, key, destination, out var valueLength).ShouldBeTrue();
+            valueLength.ShouldBe(value.Length);
+            destination.ToArray().ShouldBe(value.ToArray());
+        });
+    }
+
+    public void try_get_with_too_small_span_should_report_required_length_without_throwing()
+    {
+        using var env = CreateEnvironment();
+        env.Open();
+        env.RunTransactionScenario((tx, db) =>
+        {
+            var key = MemoryMarshal.Cast<char, byte>("spankey");
+            var value = MemoryMarshal.Cast<char, byte>("spanvalue");
+            tx.Put(db, key, value);
+
+            Span<byte> tooSmall = stackalloc byte[1];
+            tx.TryGet(db, key, tooSmall, out var valueLength).ShouldBeFalse();
+            valueLength.ShouldBe(value.Length);
+        });
+    }
+
+    public void try_get_with_span_destination_should_report_zero_length_when_not_found()
+    {
+        using var env = CreateEnvironment();
+        env.Open();
+        env.RunTransactionScenario((tx, db) =>
+        {
+            var missingKey = MemoryMarshal.Cast<char, byte>("missing");
+            Span<byte> destination = stackalloc byte[8];
+            tx.TryGet(db, missingKey, destination, out var valueLength).ShouldBeFalse();
+            valueLength.ShouldBe(0);
+        });
+    }
+
+    public void try_get_with_span_destination_should_handle_empty_value()
+    {
+        using var env = CreateEnvironment();
+        env.Open();
+        env.RunTransactionScenario((tx, db) =>
+        {
+            var key = MemoryMarshal.Cast<char, byte>("emptykey");
+            tx.Put(db, key, ReadOnlySpan<byte>.Empty);
+
+            tx.TryGet(db, key, Span<byte>.Empty, out var valueLength).ShouldBeTrue();
+            valueLength.ShouldBe(0);
+        });
+    }
+
+    public void try_get_with_buffer_writer_should_copy_value()
+    {
+        using var env = CreateEnvironment();
+        env.Open();
+        env.RunTransactionScenario((tx, db) =>
+        {
+            var key = MemoryMarshal.Cast<char, byte>("writerkey");
+            var value = MemoryMarshal.Cast<char, byte>("writervalue");
+            tx.Put(db, key, value);
+
+            var writer = new ArrayBufferWriter<byte>();
+            tx.TryGet(db, key, writer).ShouldBeTrue();
+            writer.WrittenSpan.ToArray().ShouldBe(value.ToArray());
+
+            var missingKey = MemoryMarshal.Cast<char, byte>("missing");
+            tx.TryGet(db, missingKey, writer).ShouldBeFalse();
+            writer.WrittenCount.ShouldBe(value.Length);
         });
     }
 

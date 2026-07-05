@@ -1,5 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using LightningDB.Native;
@@ -61,16 +61,11 @@ public static class LightningExtensions
     /// <param name="cursor"><see cref="LightningCursor"/></param>
     /// <returns><see cref="ValueTuple"/> key/value pairs of <see cref="MDBValue"/></returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static IEnumerable<ValueTuple<MDBValue, MDBValue>> AsEnumerable(this LightningCursor cursor)
+    public static CursorEnumerable AsEnumerable(this LightningCursor cursor)
     {
-        (MDBResultCode, MDBValue, MDBValue) result;
-        while((result = cursor.Next()).Item1 == MDBResultCode.Success)
-        {
-            yield return (result.Item2, result.Item3);
-        }
-        result.Item1.ThrowOnReadError();
+        return new CursorEnumerable(cursor);
     }
-    
+
     /// <summary>
     /// Enumerates the values for a given key. Requires MDB_DUPSORT
     /// </summary>
@@ -78,7 +73,7 @@ public static class LightningExtensions
     /// <param name="key">The key with multiple values</param>
     /// <returns><see cref="MDBValue"/> representing each value for a given key</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static IEnumerable<MDBValue> AllValuesFor(this LightningCursor cursor, byte[] key)
+    public static CursorDuplicateValuesEnumerable AllValuesFor(this LightningCursor cursor, byte[] key)
     {
         return cursor.AllValuesFor(key.AsSpan());
     }
@@ -90,29 +85,11 @@ public static class LightningExtensions
     /// <param name="key">The key with multiple values</param>
     /// <returns><see cref="MDBValue"/> representing each value for a given key</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static IEnumerable<MDBValue> AllValuesFor(this LightningCursor cursor, Span<byte> key)
+    public static CursorDuplicateValuesEnumerable AllValuesFor(this LightningCursor cursor, ReadOnlySpan<byte> key)
     {
         var result = cursor.Set(key);
         result.ThrowOnReadError();
-        return cursor.AllValuesForImpl();
-    }
-
-    /// <summary>
-    /// Enumerates the values for a given key. Requires MDB_DUPSORT
-    /// </summary>
-    /// <param name="cursor"><see cref="LightningCursor"/></param>
-    /// <returns><see cref="MDBValue"/> representing each value for a given key</returns>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static IEnumerable<MDBValue> AllValuesForImpl(this LightningCursor cursor)
-    {
-        (MDBResultCode, MDBValue, MDBValue) result = cursor.GetCurrent();
-        do
-        {
-            yield return result.Item3;
-            result = cursor.NextDuplicate();
-        } while (result.Item1 == MDBResultCode.Success);
-
-        result.Item1.ThrowOnReadError();
+        return new CursorDuplicateValuesEnumerable(cursor);
     }
 
     /// <summary>
@@ -174,7 +151,56 @@ public static class LightningExtensions
         }
         throw new LightningException("Incorrect buffer size given in destinationValueBuffer", (int)MDBResultCode.BadValSize);
     }
-        
+
+    /// <summary>
+    /// Tries to get a value by its key, copying it into a caller-owned buffer.
+    /// </summary>
+    /// <param name="tx">The transaction.</param>
+    /// <param name="db">The database to query.</param>
+    /// <param name="key">A span containing the key to look up.</param>
+    /// <param name="destination">The buffer to receive the value data.</param>
+    /// <param name="valueLength">
+    /// The length of the stored value. When the method returns false, a non-zero valueLength means the key
+    /// exists but <paramref name="destination"/> was too small (valueLength is the required size); zero means
+    /// the key was not found.
+    /// </param>
+    /// <returns>True if the key exists and the value was copied to <paramref name="destination"/>.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryGet(this LightningTransaction tx, LightningDatabase db, ReadOnlySpan<byte> key, Span<byte> destination, out int valueLength)
+    {
+        var (resultCode, _, mdbValue) = tx.Get(db, key);
+        if (resultCode != MDBResultCode.Success)
+        {
+            valueLength = 0;
+            return false;
+        }
+
+        var valueSpan = mdbValue.AsSpan();
+        valueLength = valueSpan.Length;
+        return valueSpan.TryCopyTo(destination);
+    }
+
+    /// <summary>
+    /// Tries to get a value by its key, copying it into the provided <see cref="IBufferWriter{T}"/>.
+    /// </summary>
+    /// <param name="tx">The transaction.</param>
+    /// <param name="db">The database to query.</param>
+    /// <param name="key">A span containing the key to look up.</param>
+    /// <param name="destination">The writer to receive the value data.</param>
+    /// <returns>True if key exists, false if not.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryGet(this LightningTransaction tx, LightningDatabase db, ReadOnlySpan<byte> key, IBufferWriter<byte> destination)
+    {
+        var (resultCode, _, mdbValue) = tx.Get(db, key);
+        if (resultCode != MDBResultCode.Success)
+            return false;
+
+        var valueSpan = mdbValue.AsSpan();
+        valueSpan.CopyTo(destination.GetSpan(valueSpan.Length));
+        destination.Advance(valueSpan.Length);
+        return true;
+    }
+
     /// <summary>
     /// Check whether data exists in database.
     /// </summary>

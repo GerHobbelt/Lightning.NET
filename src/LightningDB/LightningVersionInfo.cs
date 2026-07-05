@@ -8,7 +8,12 @@ namespace LightningDB;
 /// </summary>
 public class LightningVersionInfo
 {
-    internal static LightningVersionInfo Get()
+    private static LightningVersionInfo? _instance;
+
+    //lazy rather than a static initializer so the native library isn't loaded before first use
+    internal static LightningVersionInfo Get() => _instance ??= Create();
+
+    private static LightningVersionInfo Create()
     {
         var version = mdb_version(out var major, out var minor, out var patch);
         return new LightningVersionInfo
