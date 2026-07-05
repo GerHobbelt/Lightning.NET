@@ -4,11 +4,10 @@ if [ ! -d "lmdb" ]; then
   git clone https://git.openldap.org/openldap/openldap.git lmdb
 fi
 cd ./lmdb/libraries/liblmdb || exit
-git checkout LMDB_0.9.33
+git checkout LMDB_0.9.35
 
 declare -A build_outputs
 declare -A supported_targets=(
-  [ios-arm/native/liblmdb.dylib]="make CC='xcrun --sdk iphoneos --toolchain iphoneos clang -arch armv7s' LDFLAGS='-s' XCFLAGS='-DNDEBUG'"
   [ios-arm64/native/liblmdb.dylib]="make CC='xcrun --sdk iphoneos --toolchain iphoneos clang -arch arm64' LDFLAGS='-s' XCFLAGS='-DNDEBUG'"
   [iossimulator-arm64/native/liblmdb.dylib]="make CC='xcrun --sdk iphonesimulator --toolchain iphoneos clang -arch arm64' LDFLAGS='-s' XCFLAGS='-DNDEBUG'"
   [iossimulator-x64/native/liblmdb.dylib]="make CC='xcrun --sdk iphonesimulator --toolchain iphoneos clang -arch x86_64' LDFLAGS='-s' XCFLAGS='-DNDEBUG'"
